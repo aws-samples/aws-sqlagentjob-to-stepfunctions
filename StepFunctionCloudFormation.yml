@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: An example template for a Step Functions state machine.
+Parameters:
+  DatabaseInstanceType:
+    Default: db.m4.xlarge
+    AllowedValues:
+      - db.m4.xlarge
+      - db.m4.2xlarge
+      - db.r3.4xlarge
+      - db.r3.8xlarge
+    Description: The instance type to use for this test iteration.
+    Type: String
+  MasterUserPassword:
+    NoEcho: true
+    Description: The master password for the DB instance.
+    Type: String
+Resources:
+ SQLDatabase:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      AutoMinorVersionUpgrade: false
+      BackupRetentionPeriod: 1
+      CharacterSetName: String
+      DBInstanceClass: !Ref DatabaseInstanceType
+      MasterUserPassword: !Ref MasterUserPassword
+      DBSnapshotIdentifier: 'arn:aws:rds:us-east-1:638426169984:snapshot:sqlcustomer-snapshot-july2'
+      DBSubnetGroupName: default
+ StatesExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: StatesExecutionPolicy 
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'lambda:InvokeFunction'
+                Resource: '*'
+ SqlAgentActivity:
+    Type: "AWS::StepFunctions::Activity"
+    Properties: 
+      Name: SqlAgentActivity
+ MyStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: SqlAgent-StateMachine
+      DefinitionString: 
+        !Sub
+          - |-
+            {
+              "Comment": "A sql agent step function",
+              "StartAt": "SqlAgent",
+              "States": {
+                "SqlAgent": {
+                  "Type": "Task",
+                  "Resource": "${SqlAgentActivityArn}",
+                  "End": true
+                }
+              }
+            }
+          - {SqlAgentActivityArn: !Ref SqlAgentActivity}
+      RoleArn: !GetAtt [ StatesExecutionRole, Arn]
+    DependsOn:
+      - SqlAgentActivity
+ ExecuteStateMachineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: ExecuteStateMachine 
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'states:StartExecution'
+                Resource: '*'
+ CloudWatchEventRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: "Rule to invoke state machine every 30 minutes"
+      ScheduleExpression: "rate(30 minutes)"
+      State: "ENABLED"
+      Targets:
+        -
+          Arn: !Ref MyStateMachine
+          Id: MyStateMachineV1
+          Input: '{ "Command": "start" }'
+          RoleArn: !GetAtt ExecuteStateMachineRole.Arn
+Outputs:
+  SQLDatabaseEndpoint:
+    Description: Database endpoint
+    Value: !Sub '${SQLDatabase.Endpoint.Address}:${SQLDatabase.Endpoint.Port}'
+  SqlAgentActivityArn:
+    Description: Sql Agent Activity Arn
+    Value: !Ref SqlAgentActivity
+
+  
